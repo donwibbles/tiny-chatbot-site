@@ -1,19 +1,21 @@
-// /api/ask-cba.js — Node-style Vercel function (req, res)
+// /api/ask-cba.js — Contract-grounded Q&A for your CBA (Node-style Vercel Function)
 
 const fs = require("node:fs");
 const path = require("node:path");
 
-// Load your prebuilt embeddings once per cold start.
-// If you put the file in /data instead of repo root, change the join line accordingly.
+// ---- Load your precomputed chunks once per cold start ----
+// If you stored the file under /data instead of repo root, change the join below to:
+//   const jsonPath = path.join(process.cwd(), "data", "cba_chunks.json");
 let chunks = [];
 try {
-  const jsonPath = path.join(process.cwd(), "cba_chunks.json"); // or ["data","cba_chunks.json"]
+  const jsonPath = path.join(process.cwd(), "cba_chunks.json");
   const raw = fs.readFileSync(jsonPath, "utf8");
   chunks = JSON.parse(raw);
 } catch (e) {
   console.error("Could not load cba_chunks.json:", e);
 }
 
+// ---- Helpers ----
 function cosine(a, b) {
   let dot = 0, na = 0, nb = 0;
   for (let i = 0; i < a.length; i++) {
@@ -49,6 +51,7 @@ async function readJsonBody(req) {
   });
 }
 
+// ---- Main handler ----
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
     res.statusCode = 405;
@@ -71,30 +74,42 @@ module.exports = async (req, res) => {
     return res.json({ error: "Missing question" });
   }
 
-  // 1) embed the question
+  // 1) Embed the user query
   const qvec = await embedQuery(question);
   if (!qvec) {
     res.statusCode = 500;
     return res.json({ error: "Embedding failed" });
   }
 
-  // 2) rank chunks
+  // 2) Rank chunks by similarity
   const scored = chunks.map(c => ({ ...c, score: cosine(qvec, c.embedding) }));
   scored.sort((a, b) => b.score - a.score);
-  const top = scored.slice(0, 5);
-
-  // 3) build prompt with correct Responses API types
+  const top = scored.slice(0, 8); // use more context for better answers
   const context = top.map(c => c.text).join("\n\n");
+
+  // 3) Build prompt — allow translate/summarize/bullets, but NO new facts
+  const allowTransform =
+    /translate|traduce|traducir|summarize|resumen|bullet|format/i.test(question);
+
+  const systemText =
+    "You are a contract assistant grounded ONLY in the provided contract excerpts. " +
+    "You MAY quote, summarize, restructure, or TRANSLATE the provided excerpts if requested. " +
+    "Do NOT add information that is not explicitly present in the excerpts. " +
+    "If something is not in the excerpts, say 'not sure'. " +
+    "Format responses in **Markdown** (use short headings, bullet points, and bold for key terms). " +
+    "Keep answers under 600 characters. This is general info, not legal advice.";
+
+  const userText =
+    `CONTRACT EXCERPTS:\n${context}\n\n` +
+    `TASK: ${allowTransform ? "Translate/summarize/reformat if requested, otherwise answer directly." : "Answer directly from the excerpts."}\n` +
+    `QUESTION: ${question}`;
+
   const input = [
-    { role: "system", content: [{ type: "input_text", text:
-      "You are a contract assistant. Answer ONLY from the provided contract excerpts. If unsure, say 'not sure.' Keep answers under 600 characters. This is general info, not legal advice."
-    }]},
-    { role: "user", content: [{ type: "input_text", text:
-      `CONTRACT:\n${context}\n\nQUESTION: ${question}`
-    }]}
+    { role: "system", content: [{ type: "input_text", text: systemText }] },
+    { role: "user",   content: [{ type: "input_text", text: userText }] }
   ];
 
-  // 4) call OpenAI
+  // 4) Call OpenAI Responses API
   const r = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -113,7 +128,7 @@ module.exports = async (req, res) => {
 
   const data = await r.json();
 
-  // Prefer the new structure; fall back if needed
+  // Extract text safely (handles both output_text and output[].content[].text)
   let reply = null;
   if (Array.isArray(data.output) && data.output[0]?.content?.[0]?.text) {
     reply = data.output[0].content[0].text;
