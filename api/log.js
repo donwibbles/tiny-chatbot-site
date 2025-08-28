@@ -1,5 +1,4 @@
-// /api/log.js — receives message metadata and forwards it.
-// Configure SHEETS_WEBHOOK_URL in Vercel if you want Google Sheets logging.
+// /api/log.js — receives message metadata and forwards it (console + optional Google Sheets)
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -12,29 +11,32 @@ module.exports = async function handler(req, res) {
     req.on("end", () => { try { resolve(JSON.parse(raw || "{}")); } catch { resolve({}); }});
   });
 
-  // Basic shape validation
+  // Prepare payload
   const payload = {
     ts: new Date().toISOString(),
     mode: body.mode || "unknown",
     question: String(body.question || "").slice(0, 2000),
     reply: String(body.reply || "").slice(0, 2000),
     tags: body.tags || {},
-    analytics: !!body.analytics,
-    // minimal IP info only if you later use edge; keeping it off for privacy
+    analytics: !!body.analytics
   };
 
-  // 1) Always log to console (visible in Vercel function logs)
+  // Always log to console (visible in Vercel function logs)
   console.log("ANALYTICS:", JSON.stringify(payload));
 
-  // 2) Optional: forward to Google Sheets (Apps Script → web app URL in env)
+  // Optional: forward to Google Sheets Apps Script
   const url = process.env.SHEETS_WEBHOOK_URL;
   if (url && payload.analytics) {
     try {
-      await fetch(url, {
+      const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      if (!r.ok) {
+        const t = await r.text();
+        console.error("Sheets webhook failed:", t);
+      }
     } catch (e) {
       console.error("Sheets webhook failed:", e);
     }
