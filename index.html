@@ -24,8 +24,9 @@
     input, button { font-size: 16px }
     input { flex:1; padding:12px; border:1px solid #cbd5e1; border-radius:10px }
     button { padding:12px 16px; border:0; border-radius:10px; background:#2563eb; color:#fff; cursor:pointer }
-    small { color:#64748b; display:block; padding: 8px 20px 20px }
+    small { color:#64748b; display:block; padding: 8px 20px 6px }
     .hint { font-size:12px; opacity:.85 }
+    .consent { display:flex; align-items:center; gap:8px; padding:0 20px 14px; }
   </style>
 </head>
 <body>
@@ -47,6 +48,13 @@
       <input id="msg" placeholder="Type a message…" autocomplete="off" required />
       <button type="submit">Send</button>
     </form>
+
+    <!-- Step 0: analytics opt-in -->
+    <label class="consent">
+      <input type="checkbox" id="consent" checked />
+      <span class="hint">Allow anonymous usage analytics (helps us improve responses)</span>
+    </label>
+
     <small class="hint" id="hint">Using CBA mode — the bot answers only from your contract.</small>
   </div>
 
@@ -56,18 +64,15 @@
     const input = document.getElementById('msg');
     const modeSel = document.getElementById('mode');
     const hint = document.getElementById('hint');
+    const consent = document.getElementById('consent');
 
-    // Minimal Markdown-ish renderer: escape HTML, **bold**, *italic*, bullets, newlines
+    // Minimal Markdown-ish renderer
     function mdToHtml(s) {
-      // escape HTML
       s = s.replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
-      // bold/italic
       s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
       s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
-      // split lines, build paragraphs and simple lists
       const lines = s.split(/\r?\n/);
-      let html = '';
-      let inList = false;
+      let html = '', inList = false;
       for (const line of lines) {
         if (/^\s*[-*]\s+/.test(line)) {
           if (!inList) { html += '<ul>'; inList = true; }
@@ -88,11 +93,8 @@
       row.className = `row ${who}`;
       const b = document.createElement('div');
       b.className = 'bubble';
-      if (isMarkdown) {
-        b.innerHTML = mdToHtml(text);
-      } else {
-        b.textContent = text;
-      }
+      if (isMarkdown) b.innerHTML = mdToHtml(text);
+      else b.textContent = text;
       row.appendChild(b);
       log.appendChild(row);
       log.scrollTop = log.scrollHeight;
@@ -126,19 +128,21 @@
 
       const cfg = getConfigForMode();
 
-      addLine('me', text);           // your message as plain text
+      addLine('me', text);
       input.value = '';
-      addLine('bot', '…thinking');   // placeholder
+      addLine('bot', '…thinking');
 
       try {
         const r = await fetch(cfg.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ [cfg.bodyKey]: text })
+          body: JSON.stringify({
+            [cfg.bodyKey]: text,
+            analytics: !!consent?.checked   // <-- Step 0: send analytics flag
+          })
         });
         const data = await r.json();
         const reply = data.reply || 'Sorry, I could not generate a reply.';
-        // replace the placeholder bubble content with rendered Markdown
         const lastBubble = log.lastChild.querySelector('.bubble');
         lastBubble.innerHTML = mdToHtml(reply);
       } catch (err) {
