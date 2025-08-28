@@ -7,7 +7,9 @@
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#f6f7f9; margin:0; }
     .wrap { max-width: 720px; margin: 40px auto; background: #fff; border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.07); overflow:hidden; }
-    header { padding: 16px 20px; background:#0f172a; color:#fff; font-weight:600 }
+    header { padding: 16px 20px; background:#0f172a; color:#fff; font-weight:600; display:flex; align-items:center; gap:12px; flex-wrap:wrap }
+    header .mode { margin-left:auto; display:flex; align-items:center; gap:8px; font-weight:500 }
+    header select { padding:6px 8px; border-radius:8px; border:1px solid #334155; background:#111827; color:#fff }
     #log { height: 420px; overflow:auto; padding: 16px 20px; line-height:1.4 }
     .row { margin: 10px 0; display:flex; gap:10px }
     .me { justify-content: flex-end; }
@@ -19,23 +21,37 @@
     input { flex:1; padding:12px; border:1px solid #cbd5e1; border-radius:10px }
     button { padding:12px 16px; border:0; border-radius:10px; background:#2563eb; color:#fff; cursor:pointer }
     small { color:#64748b; display:block; padding: 8px 20px 20px }
+    .hint { font-size:12px; opacity:.85 }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <header>General info only (not legal/medical advice)</header>
+    <header>
+      <div>General info only (not legal/medical advice)</div>
+      <div class="mode">
+        <label for="mode">Mode:</label>
+        <select id="mode" aria-label="Chat mode">
+          <option value="cba" selected>CBA (answers from contract)</option>
+          <option value="general">General (normal chatbot)</option>
+        </select>
+      </div>
+    </header>
+
     <div id="log"></div>
+
     <form id="chat-form">
       <input id="msg" placeholder="Type a message…" autocomplete="off" required />
       <button type="submit">Send</button>
     </form>
-    <small>Tip: keep messages short; this demo is optimized for low cost.</small>
+    <small class="hint" id="hint">Using CBA mode — the bot answers only from your contract.</small>
   </div>
 
   <script>
-    const log = document.getElementById('log');
+    const log  = document.getElementById('log');
     const form = document.getElementById('chat-form');
     const input = document.getElementById('msg');
+    const modeSel = document.getElementById('mode');
+    const hint = document.getElementById('hint');
 
     function addLine(who, text) {
       const row = document.createElement('div');
@@ -48,19 +64,43 @@
       log.scrollTop = log.scrollHeight;
     }
 
+    function getConfigForMode() {
+      if (modeSel.value === 'general') {
+        return {
+          url: '/api/chat',
+          bodyKey: 'message',
+          hint: 'Using General mode — normal chatbot.'
+        };
+      }
+      return {
+        url: '/api/ask-cba',
+        bodyKey: 'question',
+        hint: 'Using CBA mode — the bot answers only from your contract.'
+      };
+    }
+
+    modeSel.addEventListener('change', () => {
+      const cfg = getConfigForMode();
+      hint.textContent = cfg.hint;
+      addLine('bot', `Switched to: ${modeSel.options[modeSel.selectedIndex].text}`);
+    });
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const text = input.value.trim();
       if (!text) return;
+
+      const cfg = getConfigForMode();
+
       addLine('me', text);
       input.value = '';
       addLine('bot', '…thinking');
 
       try {
-        const r = await fetch('/api/chat', {
+        const r = await fetch(cfg.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify({ [cfg.bodyKey]: text })
         });
         const data = await r.json();
         const reply = data.reply || 'Sorry, I could not generate a reply.';
