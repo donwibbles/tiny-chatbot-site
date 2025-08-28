@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 // ---- Load your precomputed chunks once per cold start ----
-// If you stored the file under /data, change to: path.join(process.cwd(), "data", "cba_chunks.json")
+// If your file is in /data instead of the repo root, change to: path.join(process.cwd(), "data", "cba_chunks.json")
 let chunks = [];
 try {
   const jsonPath = path.join(process.cwd(), "cba_chunks.json");
@@ -50,7 +50,7 @@ async function readJsonBody(req) {
   });
 }
 
-// ---- Intent classifier (Step 2) ----
+// ---- Intent classifier (no response_format) ----
 async function classifyIntent(text) {
   const categories = [
     "pay","scheduling","leave","benefits","harassment_or_safety",
@@ -59,13 +59,16 @@ async function classifyIntent(text) {
 
   const input = [
     { role: "system", content: [{ type: "input_text", text:
-      "You label user questions for routing. Return strict JSON only." }] },
+      "You are a labeling function. Output STRICT JSON only with keys: category, needs_human, urgency, pii_present. No prose, no markdown."
+    }]},
     { role: "user", content: [{ type: "input_text", text:
-      `Text: ${text}\n\nChoose category from ${JSON.stringify(categories)}.\n` +
-      `Also detect: needs_human (boolean) if legal risk, discrimination, safety, emergency, or dispute; ` +
-      `urgency ('low'|'normal'|'high'|'emergency'); ` +
-      `pii_present (boolean) for full name/phone/address/SSN/identifiers.\n` +
-      `Return JSON with keys: category, needs_human, urgency, pii_present.` }] }
+      `Text: ${text}\n\n` +
+      `Choose category from ${JSON.stringify(categories)}.\n` +
+      `needs_human: boolean (true if legal risk, discrimination, safety, emergency, or strong dispute).\n` +
+      `urgency: one of "low" | "normal" | "high" | "emergency".\n` +
+      `pii_present: boolean (true if full name, phone, address, SSN, or precise identifiers are present).\n` +
+      `Return ONLY a JSON object, nothing else.`
+    }]}
   ];
 
   try {
@@ -78,18 +81,27 @@ async function classifyIntent(text) {
       body: JSON.stringify({
         model: "gpt-4o-mini",
         input,
-        response_format: { type: "json_object" }
+        max_output_tokens: 150
       })
     });
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
-    let txt = null;
+
+    let raw = null;
     if (Array.isArray(data.output) && data.output[0]?.content?.[0]?.text) {
-      txt = data.output[0].content[0].text;
+      raw = data.output[0].content[0].text;
     } else if (data.output_text) {
-      txt = data.output_text;
+      raw = data.output_text;
     }
-    return JSON.parse(txt || "{}");
+    if (!raw) throw new Error("empty classifier output");
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
+    const obj = JSON.parse(cleaned);
+    return {
+      category: obj.category ?? "other",
+      needs_human: !!obj.needs_human,
+      urgency: obj.urgency ?? "low",
+      pii_present: !!obj.pii_present
+    };
   } catch (e) {
     console.error("classifyIntent error:", e);
     return { category: "other", needs_human: false, urgency: "low", pii_present: false };
@@ -181,14 +193,22 @@ module.exports = async (req, res) => {
   }
   reply = reply?.slice(0, 600) || "Sorry, I could not generate a reply.";
 
-  // 5) Tag + log (fire-and-forget)
+  // 5) Tag + log (fire-and-forget) — build absolute URL from Host header
   const tags = await classifyIntent(question);
-  const logUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/api/log` : "/api/log";
-  fetch(logUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "cba", question, reply, tags, analytics: !!analytics })
-  }).catch(() => {});
+  const host = req.headers.host; // e.g. tiny-chatbot-site.vercel.app
+  const base = host ? `https://${host}` : (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  const logUrl = base ? `${base}/api/log` : null;
+  if (!base) console.error("Log URL base missing: neither req.headers.host nor VERCEL_URL is set.");
+
+  if (logUrl) {
+    fetch(logUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "cba", question, reply, tags, analytics: !!analytics })
+    })
+    .then(r => { if (!r.ok) return r.text().then(t => Promise.reject(t)); })
+    .catch(err => console.error("POST /api/log failed:", err));
+  }
 
   return res.json({ reply });
 };
