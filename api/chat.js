@@ -1,66 +1,64 @@
-// Vercel Function using the Web Request/Response API
-export default async function handler(request) {
-  if (request.method !== 'POST') {
-    return new Response('Method Not Allowed', { status: 405 });
+// /api/chat.js — simple general chatbot, Node-style (req, res)
+
+module.exports = async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.statusCode = 405;
+    return res.end("Method Not Allowed");
   }
 
-  const { message } = await request.json().catch(() => ({}));
-  if (!message || typeof message !== 'string') {
-    return new Response(JSON.stringify({ error: 'Missing message' }), {
-      status: 400,
-      headers: { 'content-type': 'application/json' }
-    });
+  if (!process.env.OPENAI_API_KEY) {
+    res.statusCode = 500;
+    return res.json({ error: "Missing OPENAI_API_KEY" });
   }
 
-  try {
-    const r = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        input: [
-          { role: 'system', content: [{ type: 'text', text: 'You are a concise, friendly website chatbot. Keep replies under 500 characters and avoid sensitive advice.' }] },
-          { role: 'user',   content: [{ type: 'text', text: message }] }
-        ]
-      })
+  // read body
+  const body = await new Promise((resolve) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      try { resolve(JSON.parse(raw || "{}")); }
+      catch { resolve({}); }
     });
+  });
 
-    if (!r.ok) {
-      const errText = await r.text();
-      return new Response(JSON.stringify({ error: 'OpenAI error', details: errText }), {
-        status: 500, headers: { 'content-type': 'application/json' }
-      });
-    }
-
-    const data = await r.json();
-
-    // Prefer output_text if present; otherwise assemble text from output items.
-    let reply = data.output_text;
-    if (!reply) {
-      const items = Array.isArray(data.output) ? data.output : [];
-      const texts = [];
-      for (const it of items) {
-        if (it?.content) {
-          for (const c of it.content) {
-            if (c.type === 'output_text' || c.type === 'text') {
-              texts.push(c.text);
-            }
-          }
-        }
-      }
-      reply = texts.join(' ').trim();
-    }
-    reply = (reply || 'Sorry—try again.').slice(0, 500);
-
-    return new Response(JSON.stringify({ reply }), {
-      headers: { 'content-type': 'application/json' }
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: 'Server error' }), {
-      status: 500, headers: { 'content-type': 'application/json' }
-    });
+  const message = body.message;
+  if (!message) {
+    res.statusCode = 400;
+    return res.json({ error: "Missing message" });
   }
-}
+
+  const input = [
+    { role: "system", content: [{ type: "input_text", text:
+      "You are a concise, friendly website chatbot. Keep replies under 500 characters and avoid sensitive advice."
+    }]},
+    { role: "user", content: [{ type: "input_text", text: message }]}
+  ];
+
+  const r = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ model: "gpt-4o-mini", input })
+  });
+
+  if (!r.ok) {
+    const t = await r.text();
+    console.error("Responses API error:", t);
+    res.statusCode = 500;
+    return res.json({ error: "OpenAI error" });
+  }
+
+  const data = await r.json();
+
+  let reply = null;
+  if (Array.isArray(data.output) && data.output[0]?.content?.[0]?.text) {
+    reply = data.output[0].content[0].text;
+  } else if (data.output_text) {
+    reply = data.output_text;
+  }
+  reply = reply?.slice(0, 500) || "Sorry—try again.";
+
+  return res.json({ reply });
+};
