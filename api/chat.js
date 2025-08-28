@@ -1,4 +1,27 @@
-// /api/chat.js — General chatbot with Markdown + intent tags + logging
+// /api/chat.js — General chatbot with Markdown + intent tags + inline Sheets logging
+
+// ---- Inline logger to Google Sheets ----
+async function logToSheets(payload) {
+  console.log("ANALYTICS:", JSON.stringify(payload));
+  const url = process.env.SHEETS_WEBHOOK_URL;
+  if (!url || !payload.analytics) return;
+
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      console.error("Sheets webhook failed:", resp.status, text);
+    } else {
+      console.log("Sheets webhook ok:", resp.status, text);
+    }
+  } catch (e) {
+    console.error("Sheets webhook error:", e);
+  }
+}
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -27,7 +50,7 @@ module.exports = async function handler(req, res) {
     return res.json({ error: "Missing message" });
   }
 
-  // ---- Intent classifier (same as in ask-cba) ----
+  // ---- Intent classifier (same as ask-cba) ----
   async function classifyIntent(text) {
     const categories = [
       "pay","scheduling","leave","benefits","harassment_or_safety",
@@ -116,28 +139,9 @@ module.exports = async function handler(req, res) {
     }
     reply = reply?.slice(0, 500) || "Sorry—try again.";
 
-    // ---- Tag + log (AWAIT) ----
+    // ---- Tag + log (inline, awaited) ----
     const tags = await classifyIntent(message);
-    const host = req.headers.host;
-    const base = host ? `https://${host}` : (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-    const logUrl = base ? `${base}/api/log` : null;
-    if (!base) console.error("Log URL base missing: neither req.headers.host nor VERCEL_URL is set.");
-
-    if (logUrl) {
-      try {
-        const lr = await fetch(logUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: "general", question: message, reply, tags, analytics: !!analytics })
-        });
-        if (!lr.ok) {
-          const t = await lr.text();
-          console.error("POST /api/log failed:", lr.status, t);
-        }
-      } catch (err) {
-        console.error("POST /api/log error:", err);
-      }
-    }
+    await logToSheets({ mode: "general", question: message, reply, tags, analytics: !!analytics });
 
     return res.json({ reply });
   } catch (err) {
