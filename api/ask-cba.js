@@ -1,10 +1,10 @@
-// /api/ask-cba.js — Contract-grounded Q&A with intent tags + logging (Node-style req/res)
+// /api/ask-cba.js — Contract-grounded Q&A with intent tags + logging
 
 const fs = require("node:fs");
 const path = require("node:path");
 
 // ---- Load your precomputed chunks once per cold start ----
-// If your file is in /data instead of the repo root, change to: path.join(process.cwd(), "data", "cba_chunks.json")
+// If your file lives in /data, change to: path.join(process.cwd(), "data", "cba_chunks.json")
 let chunks = [];
 try {
   const jsonPath = path.join(process.cwd(), "cba_chunks.json");
@@ -78,11 +78,7 @@ async function classifyIntent(text) {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        input,
-        max_output_tokens: 150
-      })
+      body: JSON.stringify({ model: "gpt-4o-mini", input, max_output_tokens: 150 })
     });
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
@@ -193,21 +189,27 @@ module.exports = async (req, res) => {
   }
   reply = reply?.slice(0, 600) || "Sorry, I could not generate a reply.";
 
-  // 5) Tag + log (fire-and-forget) — build absolute URL from Host header
+  // 5) Tag + log (AWAIT so it runs before exit)
   const tags = await classifyIntent(question);
-  const host = req.headers.host; // e.g. tiny-chatbot-site.vercel.app
+  const host = req.headers.host;
   const base = host ? `https://${host}` : (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
   const logUrl = base ? `${base}/api/log` : null;
   if (!base) console.error("Log URL base missing: neither req.headers.host nor VERCEL_URL is set.");
 
   if (logUrl) {
-    fetch(logUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "cba", question, reply, tags, analytics: !!analytics })
-    })
-    .then(r => { if (!r.ok) return r.text().then(t => Promise.reject(t)); })
-    .catch(err => console.error("POST /api/log failed:", err));
+    try {
+      const lr = await fetch(logUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "cba", question, reply, tags, analytics: !!analytics })
+      });
+      if (!lr.ok) {
+        const t = await lr.text();
+        console.error("POST /api/log failed:", lr.status, t);
+      }
+    } catch (err) {
+      console.error("POST /api/log error:", err);
+    }
   }
 
   return res.json({ reply });
