@@ -1,4 +1,4 @@
-// /api/chat.js — General chatbot with Markdown + intent tags + logging (Node-style req/res)
+// /api/chat.js — General chatbot with Markdown + intent tags + logging
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -27,7 +27,7 @@ module.exports = async function handler(req, res) {
     return res.json({ error: "Missing message" });
   }
 
-  // ---- Intent classifier (same helper as ask-cba, inline here) ----
+  // ---- Intent classifier (same as in ask-cba) ----
   async function classifyIntent(text) {
     const categories = [
       "pay","scheduling","leave","benefits","harassment_or_safety",
@@ -55,11 +55,7 @@ module.exports = async function handler(req, res) {
           "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          input,
-          max_output_tokens: 150
-        })
+        body: JSON.stringify({ model: "gpt-4o-mini", input, max_output_tokens: 150 })
       });
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
@@ -120,7 +116,7 @@ module.exports = async function handler(req, res) {
     }
     reply = reply?.slice(0, 500) || "Sorry—try again.";
 
-    // ---- Tag + log (absolute URL) ----
+    // ---- Tag + log (AWAIT) ----
     const tags = await classifyIntent(message);
     const host = req.headers.host;
     const base = host ? `https://${host}` : (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
@@ -128,13 +124,19 @@ module.exports = async function handler(req, res) {
     if (!base) console.error("Log URL base missing: neither req.headers.host nor VERCEL_URL is set.");
 
     if (logUrl) {
-      fetch(logUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "general", question: message, reply, tags, analytics: !!analytics })
-      })
-      .then(r => { if (!r.ok) return r.text().then(t => Promise.reject(t)); })
-      .catch(err => console.error("POST /api/log failed:", err));
+      try {
+        const lr = await fetch(logUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "general", question: message, reply, tags, analytics: !!analytics })
+        });
+        if (!lr.ok) {
+          const t = await lr.text();
+          console.error("POST /api/log failed:", lr.status, t);
+        }
+      } catch (err) {
+        console.error("POST /api/log error:", err);
+      }
     }
 
     return res.json({ reply });
