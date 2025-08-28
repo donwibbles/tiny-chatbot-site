@@ -16,6 +16,10 @@
     .bubble { max-width: 80%; padding: 10px 14px; border-radius: 12px; }
     .me .bubble { background:#e0f2fe }
     .bot .bubble { background:#f1f5f9 }
+    /* markdown-ish tweaks */
+    .bubble p { margin: 6px 0; }
+    .bubble ul { margin: 6px 0 6px 18px; padding: 0; }
+    .bubble strong { font-weight: 700; }
     form { display:flex; gap:10px; padding: 16px 20px; background:#f8fafc; border-top:1px solid #e5e7eb }
     input, button { font-size: 16px }
     input { flex:1; padding:12px; border:1px solid #cbd5e1; border-radius:10px }
@@ -53,12 +57,42 @@
     const modeSel = document.getElementById('mode');
     const hint = document.getElementById('hint');
 
-    function addLine(who, text) {
+    // Minimal Markdown-ish renderer: escape HTML, **bold**, *italic*, bullets, newlines
+    function mdToHtml(s) {
+      // escape HTML
+      s = s.replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+      // bold/italic
+      s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      // split lines, build paragraphs and simple lists
+      const lines = s.split(/\r?\n/);
+      let html = '';
+      let inList = false;
+      for (const line of lines) {
+        if (/^\s*[-*]\s+/.test(line)) {
+          if (!inList) { html += '<ul>'; inList = true; }
+          html += '<li>' + line.replace(/^\s*[-*]\s+/, '') + '</li>';
+        } else if (line.trim() === '') {
+          if (inList) { html += '</ul>'; inList = false; }
+        } else {
+          if (inList) { html += '</ul>'; inList = false; }
+          html += '<p>' + line + '</p>';
+        }
+      }
+      if (inList) html += '</ul>';
+      return html || '<p></p>';
+    }
+
+    function addLine(who, text, isMarkdown=false) {
       const row = document.createElement('div');
       row.className = `row ${who}`;
       const b = document.createElement('div');
       b.className = 'bubble';
-      b.textContent = text;
+      if (isMarkdown) {
+        b.innerHTML = mdToHtml(text);
+      } else {
+        b.textContent = text;
+      }
       row.appendChild(b);
       log.appendChild(row);
       log.scrollTop = log.scrollHeight;
@@ -92,9 +126,9 @@
 
       const cfg = getConfigForMode();
 
-      addLine('me', text);
+      addLine('me', text);           // your message as plain text
       input.value = '';
-      addLine('bot', '…thinking');
+      addLine('bot', '…thinking');   // placeholder
 
       try {
         const r = await fetch(cfg.url, {
@@ -104,9 +138,12 @@
         });
         const data = await r.json();
         const reply = data.reply || 'Sorry, I could not generate a reply.';
-        log.lastChild.querySelector('.bubble').textContent = reply;
+        // replace the placeholder bubble content with rendered Markdown
+        const lastBubble = log.lastChild.querySelector('.bubble');
+        lastBubble.innerHTML = mdToHtml(reply);
       } catch (err) {
-        log.lastChild.querySelector('.bubble').textContent = 'Error contacting server.';
+        const lastBubble = log.lastChild.querySelector('.bubble');
+        lastBubble.textContent = 'Error contacting server.';
       }
     });
   </script>
