@@ -1,4 +1,4 @@
-// /api/ask-cba.js — Contract-grounded Q&A with intent tags + logging
+// /api/ask-cba.js — Contract-grounded Q&A with intent tags + inline Sheets logging
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -104,6 +104,29 @@ async function classifyIntent(text) {
   }
 }
 
+// ---- Inline logger to Google Sheets (no internal HTTP call) ----
+async function logToSheets(payload) {
+  console.log("ANALYTICS:", JSON.stringify(payload));
+  const url = process.env.SHEETS_WEBHOOK_URL;
+  if (!url || !payload.analytics) return; // skip if not enabled or URL missing
+
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      console.error("Sheets webhook failed:", resp.status, text);
+    } else {
+      console.log("Sheets webhook ok:", resp.status, text);
+    }
+  } catch (e) {
+    console.error("Sheets webhook error:", e);
+  }
+}
+
 // ---- Main handler ----
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
@@ -189,28 +212,9 @@ module.exports = async (req, res) => {
   }
   reply = reply?.slice(0, 600) || "Sorry, I could not generate a reply.";
 
-  // 5) Tag + log (AWAIT so it runs before exit)
+  // 5) Tag + log (inline)
   const tags = await classifyIntent(question);
-  const host = req.headers.host;
-  const base = host ? `https://${host}` : (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  const logUrl = base ? `${base}/api/log` : null;
-  if (!base) console.error("Log URL base missing: neither req.headers.host nor VERCEL_URL is set.");
-
-  if (logUrl) {
-    try {
-      const lr = await fetch(logUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "cba", question, reply, tags, analytics: !!analytics })
-      });
-      if (!lr.ok) {
-        const t = await lr.text();
-        console.error("POST /api/log failed:", lr.status, t);
-      }
-    } catch (err) {
-      console.error("POST /api/log error:", err);
-    }
-  }
+  await logToSheets({ mode: "cba", question, reply, tags, analytics: !!analytics });
 
   return res.json({ reply });
 };
